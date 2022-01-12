@@ -200,7 +200,7 @@ namespace ENBT.NET
 			}
 		}
 	}
-	public class Enbt : IEnumerable<Enbt>
+	public class Enbt : IEnumerable<Enbt>, ICloneable
 	{
 		static public readonly Enbt Empty = new();
 		static public readonly EnbtTypes.Endian CurEndian = BitConverter.IsLittleEndian ? EnbtTypes.Endian.little : EnbtTypes.Endian.big;
@@ -225,6 +225,119 @@ namespace ENBT.NET
 
 		private object? obj;
 		private EnbtTypes.TypeId _type;
+		private Enbt(EnbtTypes.TypeId type, object? nobj)
+		{
+			_type = type;
+            switch (type.Type)
+            {
+				case EnbtTypes.Type.none:
+					break;
+				case EnbtTypes.Type.integer:
+                    switch (type.Length)
+					{
+						case EnbtTypes.LenType.Tiny:
+							if (type.IsSigned)
+								obj = (sbyte)(nobj ?? 0);
+							else
+								obj = (byte)(nobj ?? 0);
+							break;
+						case EnbtTypes.LenType.Short:
+							if (type.IsSigned)
+								obj = (short)(nobj ?? 0);
+							else
+								obj = (ushort)(nobj ?? 0);
+							break;
+						case EnbtTypes.LenType.Default:
+							if (type.IsSigned)
+								obj = (int)(nobj ?? 0);
+							else
+								obj = (uint)(nobj ?? 0);
+							break;
+						case EnbtTypes.LenType.Long:
+							if(type.IsSigned)
+								obj = (long)(nobj ?? 0);
+							else
+								obj = (ulong)(nobj ?? 0);
+							break;
+					}
+					break;
+				case EnbtTypes.Type.floating:
+					switch (type.Length)
+					{
+						case EnbtTypes.LenType.Tiny:
+						case EnbtTypes.LenType.Short:
+							throw new EnbtException("Invalid type: floatng can be only default and long size");
+						case EnbtTypes.LenType.Default:
+							obj = (float)(nobj ?? 0);
+							break;
+						case EnbtTypes.LenType.Long:
+							obj = (double)(nobj ?? 0);
+							break;
+					}
+					break;
+				case EnbtTypes.Type.var_integer:
+					switch (type.Length)
+					{
+						case EnbtTypes.LenType.Tiny:
+						case EnbtTypes.LenType.Short:
+							throw new NotImplementedException();
+						case EnbtTypes.LenType.Default:
+						case EnbtTypes.LenType.Long:
+							if (type.IsSigned)
+								obj = (long)(nobj ?? 0);
+							else
+								throw new EnbtException("Invalid type: unsigned var_integer");
+							break;
+					}
+					break;
+				case EnbtTypes.Type.uuid:
+					obj = (Guid)(nobj ?? Guid.NewGuid());
+					break;
+				case EnbtTypes.Type.sarray:
+					obj = type.IsSigned ?
+						type.Length switch
+						{
+							EnbtTypes.LenType.Tiny => (sbyte[])(nobj ?? Array.Empty<sbyte>()),
+							EnbtTypes.LenType.Short => (string)(nobj ?? string.Empty),
+							EnbtTypes.LenType.Default => (int[])(nobj ?? Array.Empty<int>()),
+							EnbtTypes.LenType.Long => (long[])(nobj ?? Array.Empty<long>()),
+							_ => null
+						} :
+						type.Length switch
+						{
+							EnbtTypes.LenType.Tiny => (byte[])(nobj ?? Array.Empty<sbyte>()),
+							EnbtTypes.LenType.Short => (string)(nobj ?? string.Empty),
+							EnbtTypes.LenType.Default => (uint[])(nobj ?? Array.Empty<uint>()),
+							EnbtTypes.LenType.Long => (ulong[])(nobj ?? Array.Empty<ulong>()),
+							_ => null
+						};
+					break;
+				case EnbtTypes.Type.compound:
+					obj = (Dictionary<string, Enbt>)(nobj ?? new Dictionary<string, Enbt>());
+					break;
+				case EnbtTypes.Type.darray:
+				case EnbtTypes.Type.array:
+				case EnbtTypes.Type.structure:
+					obj = (List<Enbt>)(nobj ?? new List<Enbt>());
+					break;
+				case EnbtTypes.Type.optional:
+					if (type.IsSigned) {
+						Enbt? tmp = (Enbt?)nobj;
+						if (tmp == null)
+							break;
+						obj = new Enbt(tmp._type, tmp.obj);
+
+					}
+					break;
+				case EnbtTypes.Type.bit:
+					break;
+				default:
+					throw new NotImplementedException();
+			}
+		}
+
+
+
 
 		public Enbt()
         {
@@ -280,7 +393,7 @@ namespace ENBT.NET
                         };
                     }
                     else
-						throw new EnbtException("Invalid type: unsigned floating " + type.Length);
+						throw new EnbtException("Invalid type: unsigned var_integer " + type.Length);
 					break;
 				case EnbtTypes.Type.uuid:
 					obj = new Guid();
@@ -290,7 +403,7 @@ namespace ENBT.NET
 						type.Length switch
 						{
 							EnbtTypes.LenType.Tiny => Array.Empty<sbyte>(),
-							EnbtTypes.LenType.Short => new string(""),
+							EnbtTypes.LenType.Short => string.Empty,
 							EnbtTypes.LenType.Default => Array.Empty<int>(),
 							EnbtTypes.LenType.Long => Array.Empty<long>(),
 							_ => null
@@ -298,7 +411,7 @@ namespace ENBT.NET
 						type.Length switch
 						{
 							EnbtTypes.LenType.Tiny => Array.Empty<byte>(),
-							EnbtTypes.LenType.Short => new string(""),
+							EnbtTypes.LenType.Short => string.Empty,
 							EnbtTypes.LenType.Default => Array.Empty<uint>(),
 							EnbtTypes.LenType.Long => Array.Empty<ulong>(),
 							_ => null
@@ -814,7 +927,11 @@ namespace ENBT.NET
 
 		}
 
-		public static implicit operator Enbt(bool v) => new(v);
+        public object Clone()
+			=> new Enbt(_type, obj);
+        
+
+        public static implicit operator Enbt(bool v) => new(v);
 		public static implicit operator Enbt(sbyte v) => new(v);
 		public static implicit operator Enbt(short v) => new(v);
 		public static implicit operator Enbt(int v) => new(v);
@@ -850,7 +967,6 @@ namespace ENBT.NET
 
 
 	//TO.DO
-	// add to Enbt inheritance of ICloneable
 	// implement EnbtWriter
 	// implement EnbtReader
 }
