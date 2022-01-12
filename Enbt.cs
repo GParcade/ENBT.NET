@@ -8,8 +8,213 @@ namespace ENBT.NET
         public EnbtException(string reason) : base(reason) {}
     }
 
-	public class EnbtTypes
+	public class EnbtVarEncode<T> where T : unmanaged, IComparable, IComparable<T>, IConvertible, IEquatable<T>, IFormattable, ISpanFormattable
 	{
+		private static byte GetByte(BitArray array)
+		{
+			byte byt = 0;
+			for (int i = 7; i >= 0; i--)
+				byt = (byte)((byt << 1) | (array[i] ? 1 : 0));
+			return byt;
+		}
+		public static unsafe void FromVar(byte[] ch, out T res) 
+		{
+			if (Array.Empty<byte>() == ch || ch == null)
+			{
+				res = default;
+				return;
+			}
+			fixed (T* p = &res)
+			{
+				byte* bc = (byte*)p;
+				BitArray bitArray = new(ch);
+				int max_offset = (sizeof(T) / 5 * 5 + (sizeof(T) % 5) > 0 ? 1 : 0) * 8;
+				byte currentByte;
+				int ibs = 0;
+				do
+				{
+					int bi = 0;
+					int ac_ba_pos = ibs << 3;
+					currentByte = 0;
+					while (bi < 7)
+					{
+						if (bitArray.Length <= ac_ba_pos)
+							break;
+						if (ac_ba_pos == max_offset) throw new EnbtException("VarInt is too big");
+						currentByte |= (byte)(bitArray[ac_ba_pos++] ? 1 : 0 << bi) ;
+						++bi;
+					}
+					++ibs;
+					*bc++ = currentByte;
+					currentByte |= (byte)(bitArray[ac_ba_pos] ? 1 : 0 << bi);
+				} while ((currentByte & 0b10000000) != 0);
+			}
+		}
+		public static unsafe void ToVar(in T val, out byte[] ch)
+		{
+			fixed (T* p = &val)
+			{
+				byte* bc = (byte*)p;
+				byte[] va = new byte[sizeof(T)];
+				for (int y = 0; y < sizeof(T); y++)
+					va[y] = bc[y];
+				BitArray bits = new(va);
+				
+
+				byte[] res = new byte[(sizeof(T) / 5 * 5 + (sizeof(T) % 5) > 0 ? 1 : 0)];
+				int i = 0;
+				do
+				{
+					byte currentByte = (byte)(GetByte(bits) & 0b01111111);
+					bits.RightShift(7);
+					if (bits.Cast<bool>().Contains(true)) currentByte |= 0b10000000;
+
+					res[i++] = currentByte;
+				} while (bits.Cast<bool>().Contains(true));
+				if (res.Any(a => a != 0))
+					ch = Array.Empty<byte>();
+				else
+					ch = res;
+			}
+		}
+	}
+	public class Enbt : IEnumerable<Enbt>, ICloneable
+	{
+		static public readonly Enbt Empty = new();
+		static public readonly Endian CurEndian = BitConverter.IsLittleEndian ? Endian.little : Endian.big;
+		public struct UnkeyedEnumerator : IEnumerator<Enbt>
+        {
+			private Dictionary<string, Enbt>.Enumerator enumerator;
+			private Dictionary<string, Enbt> dic;
+			public UnkeyedEnumerator(Dictionary<string, Enbt> dic)
+            {
+				enumerator = dic.GetEnumerator();
+				this.dic = dic;
+			}
+			public Enbt Current => enumerator.Current.Value;
+			object IEnumerator.Current => enumerator.Current.Value;
+
+			public void Dispose() => enumerator.Dispose();
+
+            public bool MoveNext() => enumerator.MoveNext();
+
+			public void Reset() => enumerator = dic.GetEnumerator();
+		}
+
+		private object? obj;
+		private TypeId _type;
+		private Enbt(TypeId type, object? nobj)
+		{
+			_type = type;
+            switch (type.Type)
+            {
+				case Type.none:
+					break;
+				case Type.integer:
+                    switch (type.Length)
+					{
+						case LenType.Tiny:
+							if (type.IsSigned)
+								obj = (sbyte)(nobj ?? 0);
+							else
+								obj = (byte)(nobj ?? 0);
+							break;
+						case LenType.Short:
+							if (type.IsSigned)
+								obj = (short)(nobj ?? 0);
+							else
+								obj = (ushort)(nobj ?? 0);
+							break;
+						case LenType.Default:
+							if (type.IsSigned)
+								obj = (int)(nobj ?? 0);
+							else
+								obj = (uint)(nobj ?? 0);
+							break;
+						case LenType.Long:
+							if(type.IsSigned)
+								obj = (long)(nobj ?? 0);
+							else
+								obj = (ulong)(nobj ?? 0);
+							break;
+					}
+					break;
+				case Type.floating:
+					switch (type.Length)
+					{
+						case LenType.Tiny:
+						case LenType.Short:
+							throw new EnbtException("Invalid type: floatng can be only default and long size");
+						case LenType.Default:
+							obj = (float)(nobj ?? 0);
+							break;
+						case LenType.Long:
+							obj = (double)(nobj ?? 0);
+							break;
+					}
+					break;
+				case Type.var_integer:
+					switch (type.Length)
+					{
+						case LenType.Tiny:
+						case LenType.Short:
+							throw new NotImplementedException();
+						case LenType.Default:
+						case LenType.Long:
+							if (type.IsSigned)
+								obj = (long)(nobj ?? 0);
+							else
+								throw new EnbtException("Invalid type: unsigned var_integer");
+							break;
+					}
+					break;
+				case Type.uuid:
+					obj = (Guid)(nobj ?? Guid.NewGuid());
+					break;
+				case Type.sarray:
+					obj = type.IsSigned ?
+						type.Length switch
+						{
+							LenType.Tiny => (sbyte[])(nobj ?? Array.Empty<sbyte>()),
+							LenType.Short => (string)(nobj ?? string.Empty),
+							LenType.Default => (int[])(nobj ?? Array.Empty<int>()),
+							LenType.Long => (long[])(nobj ?? Array.Empty<long>()),
+							_ => null
+						} :
+						type.Length switch
+						{
+							LenType.Tiny => (byte[])(nobj ?? Array.Empty<sbyte>()),
+							LenType.Short => (string)(nobj ?? string.Empty),
+							LenType.Default => (uint[])(nobj ?? Array.Empty<uint>()),
+							LenType.Long => (ulong[])(nobj ?? Array.Empty<ulong>()),
+							_ => null
+						};
+					break;
+				case Type.compound:
+					obj = (Dictionary<string, Enbt>)(nobj ?? new Dictionary<string, Enbt>());
+					break;
+				case Type.darray:
+				case Type.array:
+				case Type.structure:
+					obj = (List<Enbt>)(nobj ?? new List<Enbt>());
+					break;
+				case Type.optional:
+					if (type.IsSigned) {
+						Enbt? tmp = (Enbt?)nobj;
+						if (tmp == null)
+							break;
+						obj = new Enbt(tmp._type, tmp.obj);
+
+					}
+					break;
+				case Type.bit:
+					break;
+				default:
+					throw new NotImplementedException();
+			}
+		}
+
+
 		public struct Version
 		{
 			public byte Full;
@@ -128,319 +333,110 @@ namespace ENBT.NET
 				}
 			}
 		}
-	}
-
-	public class EnbtVarEncode<T> where T : unmanaged, IComparable, IComparable<T>, IConvertible, IEquatable<T>, IFormattable, ISpanFormattable
-	{
-		private static byte GetByte(BitArray array)
-		{
-			byte byt = 0;
-			for (int i = 7; i >= 0; i--)
-				byt = (byte)((byt << 1) | (array[i] ? 1 : 0));
-			return byt;
-		}
-		public static unsafe void FromVar(byte[] ch, out T res) 
-		{
-			if (Array.Empty<byte>() == ch || ch == null)
-			{
-				res = default;
-				return;
-			}
-			fixed (T* p = &res)
-			{
-				byte* bc = (byte*)p;
-				BitArray bitArray = new(ch);
-				int max_offset = (sizeof(T) / 5 * 5 + (sizeof(T) % 5) > 0 ? 1 : 0) * 8;
-				byte currentByte;
-				int ibs = 0;
-				do
-				{
-					int bi = 0;
-					int ac_ba_pos = ibs << 3;
-					currentByte = 0;
-					while (bi < 7)
-					{
-						if (bitArray.Length <= ac_ba_pos)
-							break;
-						if (ac_ba_pos == max_offset) throw new EnbtException("VarInt is too big");
-						currentByte |= (byte)(bitArray[ac_ba_pos++] ? 1 : 0 << bi) ;
-						++bi;
-					}
-					++ibs;
-					*bc++ = currentByte;
-					currentByte |= (byte)(bitArray[ac_ba_pos] ? 1 : 0 << bi);
-				} while ((currentByte & 0b10000000) != 0);
-			}
-		}
-		public static unsafe void ToVar(in T val, out byte[] ch)
-		{
-			fixed (T* p = &val)
-			{
-				byte* bc = (byte*)p;
-				byte[] va = new byte[sizeof(T)];
-				for (int y = 0; y < sizeof(T); y++)
-					va[y] = bc[y];
-				BitArray bits = new(va);
-				
-
-				byte[] res = new byte[(sizeof(T) / 5 * 5 + (sizeof(T) % 5) > 0 ? 1 : 0)];
-				int i = 0;
-				do
-				{
-					byte currentByte = (byte)(GetByte(bits) & 0b01111111);
-					bits.RightShift(7);
-					if (bits.Cast<bool>().Contains(true)) currentByte |= 0b10000000;
-
-					res[i++] = currentByte;
-				} while (bits.Cast<bool>().Contains(true));
-				if (res.Any(a => a != 0))
-					ch = Array.Empty<byte>();
-				else
-					ch = res;
-			}
-		}
-	}
-	public class Enbt : IEnumerable<Enbt>, ICloneable
-	{
-		static public readonly Enbt Empty = new();
-		static public readonly EnbtTypes.Endian CurEndian = BitConverter.IsLittleEndian ? EnbtTypes.Endian.little : EnbtTypes.Endian.big;
-		public struct UnkeyedEnumerator : IEnumerator<Enbt>
-        {
-			private Dictionary<string, Enbt>.Enumerator enumerator;
-			private Dictionary<string, Enbt> dic;
-			public UnkeyedEnumerator(Dictionary<string, Enbt> dic)
-            {
-				enumerator = dic.GetEnumerator();
-				this.dic = dic;
-			}
-			public Enbt Current => enumerator.Current.Value;
-			object IEnumerator.Current => enumerator.Current.Value;
-
-			public void Dispose() => enumerator.Dispose();
-
-            public bool MoveNext() => enumerator.MoveNext();
-
-			public void Reset() => enumerator = dic.GetEnumerator();
-		}
-
-		private object? obj;
-		private EnbtTypes.TypeId _type;
-		private Enbt(EnbtTypes.TypeId type, object? nobj)
-		{
-			_type = type;
-            switch (type.Type)
-            {
-				case EnbtTypes.Type.none:
-					break;
-				case EnbtTypes.Type.integer:
-                    switch (type.Length)
-					{
-						case EnbtTypes.LenType.Tiny:
-							if (type.IsSigned)
-								obj = (sbyte)(nobj ?? 0);
-							else
-								obj = (byte)(nobj ?? 0);
-							break;
-						case EnbtTypes.LenType.Short:
-							if (type.IsSigned)
-								obj = (short)(nobj ?? 0);
-							else
-								obj = (ushort)(nobj ?? 0);
-							break;
-						case EnbtTypes.LenType.Default:
-							if (type.IsSigned)
-								obj = (int)(nobj ?? 0);
-							else
-								obj = (uint)(nobj ?? 0);
-							break;
-						case EnbtTypes.LenType.Long:
-							if(type.IsSigned)
-								obj = (long)(nobj ?? 0);
-							else
-								obj = (ulong)(nobj ?? 0);
-							break;
-					}
-					break;
-				case EnbtTypes.Type.floating:
-					switch (type.Length)
-					{
-						case EnbtTypes.LenType.Tiny:
-						case EnbtTypes.LenType.Short:
-							throw new EnbtException("Invalid type: floatng can be only default and long size");
-						case EnbtTypes.LenType.Default:
-							obj = (float)(nobj ?? 0);
-							break;
-						case EnbtTypes.LenType.Long:
-							obj = (double)(nobj ?? 0);
-							break;
-					}
-					break;
-				case EnbtTypes.Type.var_integer:
-					switch (type.Length)
-					{
-						case EnbtTypes.LenType.Tiny:
-						case EnbtTypes.LenType.Short:
-							throw new NotImplementedException();
-						case EnbtTypes.LenType.Default:
-						case EnbtTypes.LenType.Long:
-							if (type.IsSigned)
-								obj = (long)(nobj ?? 0);
-							else
-								throw new EnbtException("Invalid type: unsigned var_integer");
-							break;
-					}
-					break;
-				case EnbtTypes.Type.uuid:
-					obj = (Guid)(nobj ?? Guid.NewGuid());
-					break;
-				case EnbtTypes.Type.sarray:
-					obj = type.IsSigned ?
-						type.Length switch
-						{
-							EnbtTypes.LenType.Tiny => (sbyte[])(nobj ?? Array.Empty<sbyte>()),
-							EnbtTypes.LenType.Short => (string)(nobj ?? string.Empty),
-							EnbtTypes.LenType.Default => (int[])(nobj ?? Array.Empty<int>()),
-							EnbtTypes.LenType.Long => (long[])(nobj ?? Array.Empty<long>()),
-							_ => null
-						} :
-						type.Length switch
-						{
-							EnbtTypes.LenType.Tiny => (byte[])(nobj ?? Array.Empty<sbyte>()),
-							EnbtTypes.LenType.Short => (string)(nobj ?? string.Empty),
-							EnbtTypes.LenType.Default => (uint[])(nobj ?? Array.Empty<uint>()),
-							EnbtTypes.LenType.Long => (ulong[])(nobj ?? Array.Empty<ulong>()),
-							_ => null
-						};
-					break;
-				case EnbtTypes.Type.compound:
-					obj = (Dictionary<string, Enbt>)(nobj ?? new Dictionary<string, Enbt>());
-					break;
-				case EnbtTypes.Type.darray:
-				case EnbtTypes.Type.array:
-				case EnbtTypes.Type.structure:
-					obj = (List<Enbt>)(nobj ?? new List<Enbt>());
-					break;
-				case EnbtTypes.Type.optional:
-					if (type.IsSigned) {
-						Enbt? tmp = (Enbt?)nobj;
-						if (tmp == null)
-							break;
-						obj = new Enbt(tmp._type, tmp.obj);
-
-					}
-					break;
-				case EnbtTypes.Type.bit:
-					break;
-				default:
-					throw new NotImplementedException();
-			}
-		}
-
-
 
 
 		public Enbt()
         {
-			_type = EnbtTypes.TypeId.Empty;
+			_type = TypeId.Empty;
 		}
-		public Enbt(EnbtTypes.TypeId type)
+		public Enbt(TypeId type)
         {
 			_type = type;
             switch (type.Type)
 			{
-				case EnbtTypes.Type.none:
-					_type = EnbtTypes.TypeId.Empty;
+				case Type.none:
+					_type = TypeId.Empty;
 					break;
-				case EnbtTypes.Type.integer:
+				case Type.integer:
 					obj = type.IsSigned ?
 						type.Length switch
 						{
-							EnbtTypes.LenType.Tiny => (sbyte)0,
-							EnbtTypes.LenType.Short => (short)0,
-							EnbtTypes.LenType.Default => 0,
-							EnbtTypes.LenType.Long => (long)0,
+							LenType.Tiny => (sbyte)0,
+							LenType.Short => (short)0,
+							LenType.Default => 0,
+							LenType.Long => (long)0,
 							_ => null
 						}: 
 						type.Length switch
 						{
-							EnbtTypes.LenType.Tiny => (byte)0,
-							EnbtTypes.LenType.Short => (ushort)0,
-							EnbtTypes.LenType.Default => (uint)0,
-							EnbtTypes.LenType.Long => (ulong)0,
+							LenType.Tiny => (byte)0,
+							LenType.Short => (ushort)0,
+							LenType.Default => (uint)0,
+							LenType.Long => (ulong)0,
 							_ => null
 						};
 					break;
-				case EnbtTypes.Type.floating:
+				case Type.floating:
 					if (!type.IsSigned)
 					{
 						throw new EnbtException("Invalid type: floating can be only signed");
 					}
 					obj = type.Length switch
 						{
-							EnbtTypes.LenType.Short => (Half)0,
-							EnbtTypes.LenType.Default => (float)0,
-							EnbtTypes.LenType.Long => (double)0,
+							LenType.Short => (Half)0,
+							LenType.Default => (float)0,
+							LenType.Long => (double)0,
 							_ => throw new EnbtException("Invalid type: signed floating " + type.Length)
 						};
 					break;
-				case EnbtTypes.Type.var_integer:
+				case Type.var_integer:
 					if (type.IsSigned)
 					{
                         obj = type.Length switch
                         {
-                            EnbtTypes.LenType.Default or EnbtTypes.LenType.Long => (long)0,
+                            LenType.Default or LenType.Long => (long)0,
                             _ => throw new EnbtException("Invalid type: signed var_integer " + type.Length),
                         };
                     }
                     else
 						throw new EnbtException("Invalid type: unsigned var_integer " + type.Length);
 					break;
-				case EnbtTypes.Type.uuid:
+				case Type.uuid:
 					obj = new Guid();
 					break;
-				case EnbtTypes.Type.sarray:
+				case Type.sarray:
 					obj = type.IsSigned ?
 						type.Length switch
 						{
-							EnbtTypes.LenType.Tiny => Array.Empty<sbyte>(),
-							EnbtTypes.LenType.Short => string.Empty,
-							EnbtTypes.LenType.Default => Array.Empty<int>(),
-							EnbtTypes.LenType.Long => Array.Empty<long>(),
+							LenType.Tiny => Array.Empty<sbyte>(),
+							LenType.Short => string.Empty,
+							LenType.Default => Array.Empty<int>(),
+							LenType.Long => Array.Empty<long>(),
 							_ => null
 						} :
 						type.Length switch
 						{
-							EnbtTypes.LenType.Tiny => Array.Empty<byte>(),
-							EnbtTypes.LenType.Short => string.Empty,
-							EnbtTypes.LenType.Default => Array.Empty<uint>(),
-							EnbtTypes.LenType.Long => Array.Empty<ulong>(),
+							LenType.Tiny => Array.Empty<byte>(),
+							LenType.Short => string.Empty,
+							LenType.Default => Array.Empty<uint>(),
+							LenType.Long => Array.Empty<ulong>(),
 							_ => null
 						};
 					break;
-				case EnbtTypes.Type.darray:
-				case EnbtTypes.Type.array:
-				case EnbtTypes.Type.structure:
+				case Type.darray:
+				case Type.array:
+				case Type.structure:
 					obj = new List<Enbt>();
 					break;
-				case EnbtTypes.Type.compound:
+				case Type.compound:
 					obj = new Dictionary<string,Enbt>();
 					break;
-				case EnbtTypes.Type.optional:
+				case Type.optional:
 					obj = null;
 					type.IsSigned = false;
 					break;
-				case EnbtTypes.Type.bit:
+				case Type.bit:
 					break;
 				default:
 					throw new NotImplementedException();
             }
 		}
-		public Enbt(EnbtTypes.Type type, int size)
+		public Enbt(Type type, int size)
 		{
             switch (type)
 			{
-				case EnbtTypes.Type.array:
-				case EnbtTypes.Type.darray:
+				case Type.array:
+				case Type.darray:
 					break;
 				default:
 					throw new ArgumentException("type will be array Type");
@@ -451,69 +447,69 @@ namespace ENBT.NET
 			obj = enbts;
 			_type.Type = type;
 			_type.IsSigned = true;
-			_type.Length = EnbtTypes.LenType.Short;//utf-16
+			_type.Length = LenType.Short;//utf-16
 			_type.Endian = CurEndian;
 		}
 		public Enbt(string value)
 		{
 			obj = value;
-			_type.Type = EnbtTypes.Type.sarray;
+			_type.Type = Type.sarray;
 			_type.IsSigned = true;
-			_type.Length = EnbtTypes.LenType.Short;//utf-16
+			_type.Length = LenType.Short;//utf-16
 			_type.Endian = CurEndian;
 		}
 		public Enbt(bool value)
 		{
 			obj = value;
-			_type.Type = EnbtTypes.Type.bit;
+			_type.Type = Type.bit;
 			_type.IsSigned = false;
-			_type.Length = EnbtTypes.LenType.Tiny;//utf-16
-			_type.Endian = EnbtTypes.Endian.little;
+			_type.Length = LenType.Tiny;//utf-16
+			_type.Endian = Endian.little;
 		}
 		public Enbt(sbyte value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = true, Length = EnbtTypes.LenType.Tiny, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = true, Length = LenType.Tiny, Endian = CurEndian };
 		}
 		public Enbt(short value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = true, Length = EnbtTypes.LenType.Short, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = true, Length = LenType.Short, Endian = CurEndian };
 		}
 		public Enbt(int value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = true, Length = EnbtTypes.LenType.Default, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = true, Length = LenType.Default, Endian = CurEndian };
 		}
 		public Enbt(long value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = true, Length = EnbtTypes.LenType.Tiny, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = true, Length = LenType.Tiny, Endian = CurEndian };
 		}
 		public Enbt(byte value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = false, Length = EnbtTypes.LenType.Tiny, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = false, Length = LenType.Tiny, Endian = CurEndian };
 		}
 		public Enbt(ushort value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = false, Length = EnbtTypes.LenType.Short, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = false, Length = LenType.Short, Endian = CurEndian };
 		}
 		public Enbt(uint value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = false, Length = EnbtTypes.LenType.Default, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = false, Length = LenType.Default, Endian = CurEndian };
 		}
 		public Enbt(ulong value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.integer, IsSigned = false, Length = EnbtTypes.LenType.Tiny, Endian = CurEndian };
+			_type = new() { Type = Type.integer, IsSigned = false, Length = LenType.Tiny, Endian = CurEndian };
 		}
 		public Enbt(Guid value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.uuid, IsSigned = false, Length = EnbtTypes.LenType.Tiny, Endian = CurEndian };
+			_type = new() { Type = Type.uuid, IsSigned = false, Length = LenType.Tiny, Endian = CurEndian };
 		}
 		public Enbt(List<string> value)
 		{
@@ -521,7 +517,7 @@ namespace ENBT.NET
 			foreach (string s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<bool> value)
 		{
@@ -529,7 +525,7 @@ namespace ENBT.NET
 			foreach (bool s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<sbyte> value)
 		{
@@ -537,7 +533,7 @@ namespace ENBT.NET
 			foreach (sbyte s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<short> value)
 		{
@@ -545,7 +541,7 @@ namespace ENBT.NET
 			foreach (sbyte s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<int> value)
 		{
@@ -553,7 +549,7 @@ namespace ENBT.NET
 			foreach (int s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<long> value)
 		{
@@ -561,7 +557,7 @@ namespace ENBT.NET
 			foreach (long s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<byte> value)
 		{
@@ -569,7 +565,7 @@ namespace ENBT.NET
 			foreach (byte s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<ushort> value)
 		{
@@ -577,7 +573,7 @@ namespace ENBT.NET
 			foreach (ushort s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<uint> value)
 		{
@@ -585,7 +581,7 @@ namespace ENBT.NET
 			foreach (uint s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<ulong> value)
 		{
@@ -593,7 +589,7 @@ namespace ENBT.NET
 			foreach (ulong s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<Guid> value)
 		{
@@ -601,7 +597,7 @@ namespace ENBT.NET
 			foreach (Guid s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.array, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<Enbt> value,bool add_values = false)
 		{
@@ -612,7 +608,7 @@ namespace ENBT.NET
 					value.Add(new Enbt());
 			}
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.darray, IsSigned = true, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.darray, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string,string> value)
 		{
@@ -620,7 +616,7 @@ namespace ENBT.NET
             foreach (var s in value)
 				tok.Add(s.Key,new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, bool> value)
 		{
@@ -628,7 +624,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, sbyte> value)
 		{
@@ -636,7 +632,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, short> value)
 		{
@@ -644,7 +640,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, int> value)
 		{
@@ -652,7 +648,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, long> value)
 		{
@@ -660,7 +656,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, byte> value)
 		{
@@ -668,7 +664,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, ushort> value)
 		{
@@ -676,7 +672,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, uint> value)
 		{
@@ -684,7 +680,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, ulong> value)
 		{
@@ -692,7 +688,7 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, Guid> value)
 		{
@@ -700,26 +696,26 @@ namespace ENBT.NET
 			foreach (var s in value)
 				tok.Add(s.Key, new Enbt(s.Value));
 			obj = tok;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(Dictionary<string, Enbt> value)
 		{
 			obj = value;
-			_type = new() { Type = EnbtTypes.Type.compound, IsSigned = false, Length = EnbtTypes.LenType.Long, Endian = CurEndian };
+			_type = new() { Type = Type.compound, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		
 
 		public Enbt(Enbt? optional)
 		{
-			_type.Type = EnbtTypes.Type.optional;
+			_type.Type = Type.optional;
 			_type.IsSigned = optional != null;
-			_type.Length = EnbtTypes.LenType.Long;
-			_type.Endian = EnbtTypes.Endian.big;
+			_type.Length = LenType.Long;
+			_type.Endian = Endian.big;
 			obj = optional;
 		}
-		public EnbtTypes.TypeId GetTypeId()
+		public TypeId GetTypeId()
         {
-			return new EnbtTypes.TypeId() { Full = _type.Full };
+			return new TypeId() { Full = _type.Full };
 		}
 		public Enbt this[int index]
 		{
@@ -789,23 +785,23 @@ namespace ENBT.NET
 
         public override string ToString()
 		{
-			if(_type.Type == EnbtTypes.Type.none)
+			if(_type.Type == Type.none)
 					return "";
-			if (_type.Type == EnbtTypes.Type.optional && obj == null)
+			if (_type.Type == Type.optional && obj == null)
 				return "empty";
 			if (obj == null)
 				return $"null";
 			switch (_type.Type)
 			{
-				case EnbtTypes.Type.integer:
-				case EnbtTypes.Type.floating:
-				case EnbtTypes.Type.var_integer:
-				case EnbtTypes.Type.uuid:
-				case EnbtTypes.Type.optional:
-				case EnbtTypes.Type.bit:
+				case Type.integer:
+				case Type.floating:
+				case Type.var_integer:
+				case Type.uuid:
+				case Type.optional:
+				case Type.bit:
 					return $"{obj}";
-				case EnbtTypes.Type.sarray:
-					if(_type.Length == EnbtTypes.LenType.Default)
+				case Type.sarray:
+					if(_type.Length == LenType.Default)
                     {
 						return $"({obj})";
                     }
@@ -818,7 +814,7 @@ namespace ENBT.NET
 						{
 							switch (_type.Length)
 							{
-								case EnbtTypes.LenType.Tiny:
+								case LenType.Tiny:
 									foreach (var it in (sbyte[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -826,7 +822,7 @@ namespace ENBT.NET
 										sb.Append(it);
 									}
 									break;
-								case EnbtTypes.LenType.Default:
+								case LenType.Default:
 									foreach (var it in (int[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -834,7 +830,7 @@ namespace ENBT.NET
 										sb.Append(it);
 									}
 									break;
-								case EnbtTypes.LenType.Long:
+								case LenType.Long:
 									foreach (var it in (long[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -848,7 +844,7 @@ namespace ENBT.NET
                         {
 							switch (_type.Length)
 							{
-								case EnbtTypes.LenType.Tiny:
+								case LenType.Tiny:
 									foreach (var it in (byte[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -856,7 +852,7 @@ namespace ENBT.NET
 										sb.Append(it);
 									}
 									break;
-								case EnbtTypes.LenType.Default:
+								case LenType.Default:
 									foreach (var it in (uint[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -864,7 +860,7 @@ namespace ENBT.NET
 										sb.Append(it);
 									}
 									break;
-								case EnbtTypes.LenType.Long:
+								case LenType.Long:
 									foreach (var it in (ulong[])obj)
 									{
 										if (not_first_it) sb.Append(", ");
@@ -877,8 +873,8 @@ namespace ENBT.NET
 						sb.Append(')');
 						return sb.ToString();
 					}
-				case EnbtTypes.Type.darray:
-				case EnbtTypes.Type.array:
+				case Type.darray:
+				case Type.array:
 					{
 						StringBuilder sb = new();
 						bool not_first_it = false;
@@ -892,7 +888,7 @@ namespace ENBT.NET
 						sb.Append(']');
 						return sb.ToString();
 					}
-				case EnbtTypes.Type.structure:
+				case Type.structure:
 					{
 						StringBuilder sb = new();
 						bool not_first_it = false;
@@ -906,7 +902,7 @@ namespace ENBT.NET
 						sb.Append('}');
 						return sb.ToString();
 					}
-				case EnbtTypes.Type.compound:
+				case Type.compound:
 					{
 						StringBuilder sb = new();
 						bool not_first_it = false;
