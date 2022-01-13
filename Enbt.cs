@@ -103,6 +103,7 @@ namespace ENBT.NET
 
 		private object? obj;
 		private TypeId _type;
+		public TypeId TypeID { get => _type; }
 		private Enbt(TypeId type, object? nobj)
 		{
 			_type = type;
@@ -143,8 +144,10 @@ namespace ENBT.NET
 					switch (type.Length)
 					{
 						case LenType.Tiny:
-						case LenType.Short:
 							throw new EnbtException("Invalid type: floatng can be only default and long size");
+						case LenType.Short:
+							obj = (Half)(nobj ?? 0);
+							break;
 						case LenType.Default:
 							obj = (float)(nobj ?? 0);
 							break;
@@ -713,10 +716,6 @@ namespace ENBT.NET
 			_type.Endian = Endian.big;
 			obj = optional;
 		}
-		public TypeId GetTypeId()
-        {
-			return new TypeId() { Full = _type.Full };
-		}
 		public Enbt this[int index]
 		{
 			get
@@ -752,6 +751,7 @@ namespace ENBT.NET
 			}
 		}
 		public T? GetAs<T>() => obj != null ? (T?)obj : default;
+		public T As<T>() => (T?)obj ?? throw new NullReferenceException();
 		public IEnumerator<Enbt> GetEnumerator()
 		{
 			if (obj == null)
@@ -927,6 +927,7 @@ namespace ENBT.NET
 			=> new Enbt(_type, obj);
         
 
+
         public static implicit operator Enbt(bool v) => new(v);
 		public static implicit operator Enbt(sbyte v) => new(v);
 		public static implicit operator Enbt(short v) => new(v);
@@ -961,8 +962,369 @@ namespace ENBT.NET
 		public static implicit operator Enbt(Dictionary<string, Enbt> v) => new(v);
 	}
 
+	public class EnbtStream : FileStream
+	{
+		public EnbtStream(string path, FileMode mode) : base(path, mode) { }
+		public EnbtStream(string path, FileStreamOptions options) : base(path, options) { }
+		public EnbtStream(string path, FileMode mode, FileAccess access) : base(path, mode, access) { }
+		public EnbtStream(string path, FileMode mode, FileAccess access, FileShare share) : base(path, mode, access, share) { }
+		public EnbtStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) : base(path, mode, access, share, bufferSize) { }
+		public EnbtStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize, bool useAsync) : base(path, mode, access, share, bufferSize, useAsync) { }
+		public EnbtStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize, FileOptions options) : base(path, mode, access, share, bufferSize, options) { }
 
-	//TO.DO
-	// implement EnbtWriter
-	// implement EnbtReader
+
+
+
+		private static byte[] ConvertEndian(byte[] val, bool as_litle_endian)
+		{
+			if (BitConverter.IsLittleEndian != as_litle_endian)
+				Array.Reverse(val, 0, val.Length);
+			return val;
+		}
+		private static byte[] ConvertValue(Guid guid, bool as_litle_endian)
+			=> ConvertEndian(guid.ToByteArray(), as_litle_endian);
+		private static byte[] ConvertValue(double val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(float val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(Half val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(ulong val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(uint val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(ushort val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(byte val, bool as_litle_endian)
+			=> new byte[] { val };
+		private static byte[] ConvertValue(long val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(int val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(short val, bool as_litle_endian)
+			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
+		private static byte[] ConvertValue(sbyte val, bool as_litle_endian)
+			=> new byte[] { (byte)val };
+
+
+		//for read
+		private static Guid ConvertArrayUU(byte[] val, bool as_litle_endian) => new(ConvertEndian(val, as_litle_endian));
+		private static double ConvertArrayD(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToDouble(ConvertEndian(val, as_litle_endian));
+		private static float ConvertArrayF(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToSingle(ConvertEndian(val, as_litle_endian));
+		private static Half ConvertArrayH(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToHalf(ConvertEndian(val, as_litle_endian));
+		private static ulong ConvertArrayUL(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToUInt64(ConvertEndian(val, as_litle_endian));
+		private static uint ConvertArrayUI(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToUInt32(ConvertEndian(val, as_litle_endian));
+		private static ushort ConvertArrayUS(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToUInt16(ConvertEndian(val, as_litle_endian));
+		private static byte ConvertArrayUB(byte[] val, bool as_litle_endian)
+			=> val[0];
+		private static long ConvertArrayL(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToInt64(ConvertEndian(val, as_litle_endian));
+		private static int ConvertArrayI(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToInt32(ConvertEndian(val, as_litle_endian));
+		private static short ConvertArrayS(byte[] val, bool as_litle_endian)
+			=> BitConverter.ToInt16(ConvertEndian(val, as_litle_endian));
+		private static sbyte ConvertArrayB(byte[] val, bool as_litle_endian)
+			=> (sbyte)val[0];
+
+
+
+		public void SaveHeader() => WriteByte(0x10);
+		public void SaveLength(int len, Enbt.TypeId tid)
+		{
+			switch (tid.Length)
+			{
+				case Enbt.LenType.Tiny:
+					if (len != ((byte)len))
+						throw new EnbtException("cannont convert value to byte");
+					WriteByte((byte)len);
+					break;
+				case Enbt.LenType.Short:
+					if (len != ((ushort)len))
+						throw new EnbtException("cannont convert value to ushort");
+					Write(ConvertValue((ushort)len, true));
+					break;
+				case Enbt.LenType.Default:
+					if (len != ((uint)len))
+						throw new EnbtException("cannont convert value to uint");
+					Write(ConvertValue((uint)len, true));
+					break;
+				case Enbt.LenType.Long:
+					if (len != ((uint)len))
+						throw new EnbtException("cannont convert value to ulong");
+					Write(ConvertValue((ulong)len, true));
+					break;
+			}
+		}
+		public void SaveCompressedLength(ulong len)
+		{
+			byte[] part = ConvertValue(len, true);
+			const ulong b64 = 0x3FFF_FFFF_FFFF_FFFF;
+			const ulong b32 = 0x3FFF_FFFF;
+			const ulong b16 = 0x3FFF;
+			const ulong b8 = 0x3F;
+			if (len <= b8)
+			{
+				WriteByte(part[0]);
+			}
+			else if (len <= b16)
+			{
+				part[0] |= 1;
+				WriteByte(part[0]);
+				WriteByte(part[1]);
+			}
+			else if (len <= b32)
+			{
+				part[0] |= 2;
+				WriteByte(part[0]);
+				WriteByte(part[1]);
+				WriteByte(part[2]);
+				WriteByte(part[3]);
+			}
+			else if (len <= b64)
+			{
+				part[0] |= 3;
+				WriteByte(part[0]);
+				WriteByte(part[1]);
+				WriteByte(part[2]);
+				WriteByte(part[3]);
+				WriteByte(part[4]);
+				WriteByte(part[5]);
+				WriteByte(part[6]);
+				WriteByte(part[7]);
+			}
+			else
+				throw new OverflowException("fail save ulong to uint60");
+		}
+
+
+		private void SaveValue(Enbt token)
+		{
+			var tid = token.TypeID;
+			bool as_litle = tid.Endian == Enbt.Endian.little;
+			switch (tid.Type)
+			{
+				case Enbt.Type.none:
+				case Enbt.Type.bit:
+					break;
+				case Enbt.Type.integer:
+					switch (tid.Length)
+					{
+						case Enbt.LenType.Tiny:
+							if(tid.IsSigned)
+								Write(ConvertValue(token.As<sbyte>(), as_litle));
+							else
+								WriteByte(token.As<byte>());
+							break;
+						case Enbt.LenType.Short:
+							if (tid.IsSigned)
+								Write(ConvertValue(token.As<short>(), as_litle));
+							else
+								Write(ConvertValue(token.As<ushort>(), as_litle));
+							break;
+						case Enbt.LenType.Default:
+							if (tid.IsSigned)
+								Write(ConvertValue(token.As<int>(), as_litle));
+							else
+								Write(ConvertValue(token.As<uint>(), as_litle));
+							break;
+						case Enbt.LenType.Long:
+							if (tid.IsSigned)
+								Write(ConvertValue(token.As<long>(), as_litle));
+							else
+								Write(ConvertValue(token.As<ulong>(), as_litle));
+							break;
+						default:
+							throw new NotSupportedException();
+					}
+					break;
+				case Enbt.Type.floating:
+					switch (tid.Length)
+					{
+						case Enbt.LenType.Short:
+							Write(ConvertValue(token.As<Half>(), as_litle));
+							break;
+						case Enbt.LenType.Default:
+							Write(ConvertValue(token.As<float>(), as_litle));
+							break;
+						case Enbt.LenType.Long:
+							Write(ConvertValue(token.As<double>(), as_litle));
+							break;
+						default:
+							throw new NotSupportedException();
+					}
+					break;
+				case Enbt.Type.var_integer:
+                    switch (tid.Length)
+					{
+						case Enbt.LenType.Default:
+							{
+								byte[] res;
+								if (tid.IsSigned)
+									EnbtVarEncode<int>.ToVar((int)token.As<long>(), out res);
+                                else
+									EnbtVarEncode<uint>.ToVar((uint)token.As<long>(), out res);
+								Write(res);
+							}
+							break;
+						case Enbt.LenType.Long:
+							{
+								byte[] res;
+								if (tid.IsSigned)
+									EnbtVarEncode<long>.ToVar(token.As<long>(), out res);
+								else
+									EnbtVarEncode<ulong>.ToVar((ulong)token.As<long>(), out res);
+								Write(res);
+							}
+							break;
+						default:
+							throw new NotSupportedException();
+					}
+					break;
+				case Enbt.Type.uuid:
+					Write(ConvertValue(token.As<Guid>(), as_litle));
+					break;
+				case Enbt.Type.sarray:
+					if (tid.IsSigned)
+					{
+						switch (tid.Length)
+						{
+							case Enbt.LenType.Tiny:
+								{
+									sbyte[] bytes = token.As<sbyte[]>();
+									SaveCompressedLength((ulong)bytes.Length);
+									foreach (var it in bytes)
+										WriteByte(ConvertValue(it, true)[0]);
+								}
+								break;
+							case Enbt.LenType.Short:
+								{
+									string str = token.As<string>();
+									SaveCompressedLength((ulong)str.Length);
+									foreach (var it in str.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+							case Enbt.LenType.Default:
+								{
+									int[] ints = token.As<int[]>();
+									SaveCompressedLength((ulong)ints.Length);
+									foreach (var it in ints.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+							case Enbt.LenType.Long:
+								{
+									long[] longs = token.As<long[]>();
+									SaveCompressedLength((ulong)longs.Length);
+									foreach (var it in longs.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+						}
+					}
+					else
+					{
+						switch (tid.Length)
+						{
+							case Enbt.LenType.Tiny:
+								{
+									byte[] bytes = token.As<byte[]>();
+									SaveCompressedLength((ulong)bytes.Length);
+									Write(bytes);
+								}
+								break;
+							case Enbt.LenType.Short:
+								{
+									string str = token.As<string>();
+									SaveCompressedLength((ulong)str.Length);
+									foreach (var it in str.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+							case Enbt.LenType.Default:
+								{
+									uint[] ints = token.As<uint[]>();
+									SaveCompressedLength((ulong)ints.Length);
+									foreach (var it in ints.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+							case Enbt.LenType.Long:
+								{
+									ulong[] longs = token.As<ulong[]>();
+									SaveCompressedLength((ulong)longs.Length);
+									foreach (var it in longs.Select(x => ConvertValue(x, as_litle)))
+										Write(it);
+								}
+								break;
+						}
+					}
+					break;
+				case Enbt.Type.compound:
+					{
+						Dictionary<string, Enbt> enbts = token.As<Dictionary<string, Enbt>>();
+						SaveLength(enbts.Count, tid);
+						foreach (var item in enbts)
+						{
+							byte[] utf8str = Encoding.UTF8.GetBytes(item.Key);
+							SaveCompressedLength((ulong)utf8str.Length);
+							Write(utf8str);
+							SaveToken(item.Value);
+						}
+					}
+					break;
+				case Enbt.Type.darray:
+					{
+						List<Enbt> enbts = token.As<List<Enbt>>();
+						SaveLength(enbts.Count, tid);
+						foreach (var item in enbts)
+							SaveToken(item);
+					}
+					break;
+				case Enbt.Type.array:
+					{
+						List<Enbt> enbts = token.As<List<Enbt>>();
+						SaveLength(enbts.Count, tid);
+						if (enbts.Count == 0)
+						{
+							WriteByte(Enbt.TypeId.Empty.Full);
+							break;
+						}
+						else
+							WriteByte(enbts[0].TypeID.Full);
+						foreach (var item in enbts)
+							SaveValue(item);
+					}
+					break;
+				case Enbt.Type.structure:
+					{
+						List<Enbt> enbts = token.As<List<Enbt>>();
+						SaveLength(enbts.Count, tid);
+						foreach (var item in enbts)
+							WriteByte(item.TypeID.Full);
+						foreach (var item in enbts)
+							SaveValue(item);
+					}
+					break;
+				case Enbt.Type.optional:
+					if (tid.IsSigned)
+						SaveToken(token.As<Enbt>());
+					break;
+			}
+		}
+		public void SaveToken(Enbt token)
+		{
+			var tid = token.TypeID;
+			WriteByte(tid.Full);
+			SaveValue(token);
+		}
+	}
+    //TO.DO
+    // implement EnbtStream read ability
 }
