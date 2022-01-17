@@ -211,6 +211,7 @@ namespace ENBT.NET
 					}
 					break;
 				case Type.bit:
+					obj = type.IsSigned;
 					break;
 				default:
 					throw new NotImplementedException();
@@ -465,7 +466,7 @@ namespace ENBT.NET
 		{
 			obj = value;
 			_type.Type = Type.bit;
-			_type.IsSigned = false;
+			_type.IsSigned = value;
 			_type.Length = LenType.Tiny;//utf-16
 			_type.Endian = Endian.little;
 		}
@@ -513,6 +514,21 @@ namespace ENBT.NET
 		{
 			obj = value;
 			_type = new() { Type = Type.uuid, IsSigned = false, Length = LenType.Tiny, Endian = CurEndian };
+		}
+		public Enbt(Half value)
+		{
+			obj = value;
+			_type = new() { Type = Type.floating, IsSigned = false, Length = LenType.Short, Endian = CurEndian };
+		}
+		public Enbt(float value)
+		{
+			obj = value;
+			_type = new() { Type = Type.floating, IsSigned = false, Length = LenType.Default, Endian = CurEndian };
+		}
+		public Enbt(double value)
+		{
+			obj = value;
+			_type = new() { Type = Type.floating, IsSigned = false, Length = LenType.Long, Endian = CurEndian };
 		}
 		public Enbt(List<string> value)
 		{
@@ -598,6 +614,30 @@ namespace ENBT.NET
 		{
 			List<Enbt> tok = new();
 			foreach (Guid s in value)
+				tok.Add(new Enbt(s));
+			obj = tok;
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
+		}
+		public Enbt(List<Half> value)
+		{
+			List<Enbt> tok = new();
+			foreach (Half s in value)
+				tok.Add(new Enbt(s));
+			obj = tok;
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
+		}
+		public Enbt(List<float> value)
+		{
+			List<Enbt> tok = new();
+			foreach (float s in value)
+				tok.Add(new Enbt(s));
+			obj = tok;
+			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
+		}
+		public Enbt(List<double> value)
+		{
+			List<Enbt> tok = new();
+			foreach (double s in value)
 				tok.Add(new Enbt(s));
 			obj = tok;
 			_type = new() { Type = Type.array, IsSigned = true, Length = LenType.Long, Endian = CurEndian };
@@ -794,12 +834,20 @@ namespace ENBT.NET
 			switch (_type.Type)
 			{
 				case Type.integer:
-				case Type.floating:
 				case Type.var_integer:
 				case Type.uuid:
-				case Type.optional:
 				case Type.bit:
 					return $"{obj}";
+				case Type.optional:
+					return $"?{{{obj}}}";
+				case Type.floating:
+					return _type.Length switch
+					{
+						LenType.Short => ((Half)obj).ToString("", System.Globalization.CultureInfo.InvariantCulture),
+						LenType.Default => ((float)obj).ToString("", System.Globalization.CultureInfo.InvariantCulture),
+						LenType.Long => ((double)obj).ToString("", System.Globalization.CultureInfo.InvariantCulture),
+						_ => throw new NotSupportedException()
+					};
 				case Type.sarray:
 					if(_type.Length == LenType.Default)
                     {
@@ -938,6 +986,9 @@ namespace ENBT.NET
 		public static implicit operator Enbt(ulong v) => new(v);
 		public static implicit operator Enbt(string v) => new(v);
 		public static implicit operator Enbt(Guid v) => new(v);
+		public static implicit operator Enbt(Half v) => new(v);
+		public static implicit operator Enbt(float v) => new(v);
+		public static implicit operator Enbt(double v) => new(v);
 		public static implicit operator Enbt(List<bool> v) => new(v);
 		public static implicit operator Enbt(List<sbyte> v) => new(v);
 		public static implicit operator Enbt(List<short> v) => new(v);
@@ -948,6 +999,9 @@ namespace ENBT.NET
 		public static implicit operator Enbt(List<ulong> v) => new(v);
 		public static implicit operator Enbt(List<string> v) => new(v);
 		public static implicit operator Enbt(List<Guid> v) => new(v);
+		public static implicit operator Enbt(List<Half> v) => new(v);
+		public static implicit operator Enbt(List<float> v) => new(v);
+		public static implicit operator Enbt(List<double> v) => new(v);
 		public static implicit operator Enbt(List<Enbt> v) => new(v, true);
 		public static implicit operator Enbt(Dictionary<string,bool> v) => new(v);
 		public static implicit operator Enbt(Dictionary<string,sbyte> v) => new(v);
@@ -981,8 +1035,13 @@ namespace ENBT.NET
 				Array.Reverse(val, 0, val.Length);
 			return val;
 		}
-		private static byte[] ConvertValue(Guid guid, bool as_litle_endian)
-			=> ConvertEndian(guid.ToByteArray(), as_litle_endian);
+		private static byte[] ConvertValue(Guid guid, bool as_litle_endian) {
+			byte[] guid_val = guid.ToByteArray();
+			Array.Reverse(guid_val, 0, 4);
+			Array.Reverse(guid_val, 4, 2);
+			Array.Reverse(guid_val, 6, 2);
+			return ConvertEndian(guid_val, as_litle_endian); 
+		}
 		private static byte[] ConvertValue(double val, bool as_litle_endian)
 			=> ConvertEndian(BitConverter.GetBytes(val), as_litle_endian);
 		private static byte[] ConvertValue(float val, bool as_litle_endian)
@@ -1008,7 +1067,13 @@ namespace ENBT.NET
 
 
 		//for read
-		private static Guid ConvertArrayUU(byte[] val, bool as_litle_endian) => new(ConvertEndian(val, as_litle_endian));
+		private static Guid ConvertArrayUU(byte[] val, bool as_litle_endian) {
+			ConvertEndian(val, as_litle_endian);
+			Array.Reverse(val, 0, 4);
+			Array.Reverse(val, 4, 2);
+			Array.Reverse(val, 6, 2);
+			return new(val);
+		}
 		private static double ConvertArrayD(byte[] val, bool as_litle_endian)
 			=> BitConverter.ToDouble(ConvertEndian(val, as_litle_endian));
 		private static float ConvertArrayF(byte[] val, bool as_litle_endian)
